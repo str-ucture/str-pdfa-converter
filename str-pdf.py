@@ -1,251 +1,600 @@
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, filedialog, ttk
-
-import ghostscript
+from tkinter import font as tkfont
 import sys
-import os
-
 import requests
+import ghostscript
+import webbrowser
+from pathlib import Path
+from typing import List, Iterable
+from PIL import Image, ImageTk
+import threading
+import queue
+from tkinterdnd2 import DND_FILES, TkinterDnD
+import tempfile # For safe in-place overwrites
+import os       # For the atomic replace operation
 
-# Define authentication
-url = f"https://raw.githubusercontent.com/str-ucture/str-key/refs/heads/main/key_25.txt"
+# --- Constants ---
+APP_NAME = "PDF to PDF/A Converter"
+APP_VERSION = "1.1.0"
+WINDOW_WIDTH = 650
+WINDOW_HEIGHT = 550
+AUTH_URL = "https://raw.githubusercontent.com/str-ucture/str-key/refs/heads/main/key_25.txt"
+AUTH_FILE_PATH = Path("utils/auth.bin")
+ICON_PATH = Path("utils/str.ico")
+COPY_ICON_PATH = Path("utils/btn_copy.ico")
+MIN_PANE_HEIGHT = 75
 
-response = requests.get(url)
-if response.status_code == 200:
-    expected_str_key = response.text.strip()
-else:
-    expected_str_key = None
+PDFA_MAP = {
+    "PDF/A-1b": "-dPDFA=1",
+    "PDF/A-2b": "-dPDFA=2",
+    "PDF/A-3b": "-dPDFA=3",
+}
+DEFAULT_PDFA_VERSION = "PDF/A-2b"
 
-key_path = r"utils/auth.bin"
-if os.path.exists(key_path):
-    with open(key_path, "rb") as f:
-        stored_str_key = f.read().decode()
-else:
-    stored_str_key = None
+# --- Helper Classes & Functions ---
+class BatchConfirmDialog(tk.Toplevel):
+    """A custom modal dialog for the batch file conflict."""
+    def __init__(self, parent, title, conflicting_files):
+        super().__init__(parent)
+        self.title(title)
+        self.result = "cancel"
+        self.transient(parent)
+        self.grab_set()
+        main_frame = ttk.Frame(self, padding=20)
+        main_frame.pack(expand=True, fill="both")
+        file_list_str = "\n".join(f"- {name}" for name in conflicting_files[:5])
+        if len(conflicting_files) > 5:
+            file_list_str += f"\n- ...and {len(conflicting_files) - 5} more"
+        message = f"The following {len(conflicting_files)} file(s) already exist in the destination:\n\n{file_list_str}\n\nWhat would you like to do?"
+        ttk.Label(main_frame, text=message, wraplength=400, justify="left").pack(pady=(0, 20))
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack()
+        ttk.Button(button_frame, text="Overwrite All", command=lambda: self._set_result("overwrite")).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Create Copies", command=lambda: self._set_result("copy")).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Cancel", command=lambda: self._set_result("cancel")).pack(side="left", padx=5)
+        self.protocol("WM_DELETE_WINDOW", lambda: self._set_result("cancel"))
+        self._center_window(parent)
+        self.wait_window(self)
 
-def center_window(win, width, height):
-    # Get screen width and height
+    def _set_result(self, result):
+        self.result = result
+        self.destroy()
+
+    def _center_window(self, parent):
+        self.update_idletasks()
+        parent_x, parent_y = parent.winfo_x(), parent.winfo_y()
+        parent_width, parent_height = parent.winfo_width(), parent.winfo_height()
+        dialog_width, dialog_height = self.winfo_width(), self.winfo_height()
+        x = parent_x + (parent_width - dialog_width) // 2
+        y = parent_y + (parent_height - dialog_height) // 2
+        self.geometry(f"+{x}+{y}")
+
+class TextRedirector:
+    def __init__(self, text_widget: scrolledtext.ScrolledText):
+        self.text_widget = text_widget
+    def write(self, string: str):
+        self.text_widget.configure(state='normal')
+        self.text_widget.insert(tk.END, string)
+        self.text_widget.see(tk.END)
+        self.text_widget.configure(state='disabled')
+    def flush(self):
+        pass
+
+def center_window(win: tk.Tk, width: int, height: int):
     screen_width = win.winfo_screenwidth()
     screen_height = win.winfo_screenheight()
-
-    # Calculate position x and y coordinates
     x = (screen_width - width) // 2
     y = (screen_height - height) // 2
-
-    # Set the geometry of the window
     win.geometry(f'{width}x{height}+{x}+{y}')
 
-def disable_frame(frame):
-    for child in frame.winfo_children():
-        try:
-            child.configure(state='disabled')
-        except tk.TclError:
-            pass
-
-# Redirect stdout to GUI text box
-class TextRedirector:
-    def __init__(self, text_widget):
-        self.text_widget = text_widget
-
-    def write(self, string):
-        self.text_widget.configure(state='normal')    # Enable temporarily
-        self.text_widget.insert(tk.END, string)
-        self.text_widget.see(tk.END)                  # Auto-scroll
-        self.text_widget.configure(state='disabled')  # Disable again
-
-    def flush(self):
-        pass  # Needed for compatibility with stdout
-
-def pdf_to_pdfa(input_pdf_filepath: str, output_pdf_filepath: str) -> None:
-    """
-    Convert a PDF file(s) to PDF/A file(s).
-    """
-    args = [
-        # r"./Ghostscript/App/bin/gsdll64.dll",                   # Ignored on Windows
-        "-dSAFER",                                              # Enforce safe file access
-        "-dBATCH",                                              # Batch mode
-        "-dNOPAUSE",                                            # No pauses
-        pdfa_version,                                           # Specify the -dPDFA option to specify PDF/A-1, -dPDFA=2 for PDF/A-2 or -dPDFA=3 for PDF/A-3.
-        "-sDEVICE=pdfwrite",                                    # Output device, alternative = ps2pdf
-        "-sColorConversionStrategy=UseDeviceIndependentColor",  # Other options: RGB or CMYK
-        "-dPDFACompatibilityPolicy=1",                          # Compliance: 0 (default), 1 (Scrict Compliance)
-        "-dCompressFonts=false",                                # Do not compress fonts
-        f"-sOutputFile={output_pdf_filepath}",
-        input_pdf_filepath
-    ]
-
-    print(f"PDF/A Version: {args[4]}")
-    print(f"Input PDF: {input_pdf_filepath}")
-    print(f"Output PDF/A: {output_pdf_filepath}")
-    # Invoke Ghostscript C API
-    ghostscript.Ghostscript(*args)
-    print(f"File converted successfully.\n")
-
-def convert_single_file():
-    input_pdf = filedialog.askopenfilename(
-        title="Select PDF to Convert",
-        filetypes=[("PDF files", "*.pdf")]
-    )
-    if not input_pdf:
-        print("No input file selected.\n")
-        return
-
-    # Suggest output filename
-    input_dir = os.path.dirname(input_pdf)
-    input_name = os.path.basename(input_pdf)
-    pdf_filename, ext = os.path.splitext(input_name)
-    suggested_output = os.path.join(input_dir, f"{pdf_filename}.pdf")
-
-    output_pdf = filedialog.asksaveasfilename(
-        title="Save PDF/A As",
-        initialfile=os.path.basename(suggested_output),
-        initialdir=input_dir,
-        defaultextension=".pdf",
-        filetypes=[("PDF files", "*.pdf")]
-    )
-    if not output_pdf:
-        print("No output file selected.\n")
-        return
-
+def check_authentication(url: str, local_path: Path) -> bool:
     try:
-        print(f"Converting '{input_name}' to PDF/A...")
-        pdf_to_pdfa(input_pdf, output_pdf)
-        # messagebox.showinfo("Success", "PDF/A conversion completed!")
-    except Exception as e:
-        print(f"Error during conversion: {e}")
-        messagebox.showerror("Error", str(e))
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        expected_str_key = response.text.strip()
+    except requests.exceptions.RequestException as e:
+        print(f"Authentication Error: Could not fetch remote key. {e}")
+        return False
+    if not local_path.exists():
+        print(f"Authentication Error: Local key file not found at '{local_path}'.")
+        return False
+    try:
+        stored_str_key = local_path.read_text(encoding='utf-8').strip()
+    except IOError as e:
+        print(f"Authentication Error: Could not read local key file. {e}")
+        return False
+    return stored_str_key == expected_str_key
 
-def convert_multiple_files():
-    # Select input folder
-    input_dir = filedialog.askdirectory(title="Select Input Folder Containing PDFs")
-    if not input_dir:
-        print("No input folder selected.\n")
-        return
+# --- Main Application Class ---
+
+class PdfConverterApp:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.copy_icon = None
+        self.files_to_convert: List[Path] = []
+        self.path_to_iid_map = {}
+        self.log_visible = False
+        self.is_converting = False
+        self.output_directory: Path = None
+        self.placeholder_label = None # For empty list message
+        
+        self._setup_window()
+        self._configure_styles()
+        self._setup_ui()
+        self._redirect_output()
+
+    def _setup_window(self):
+        self.root.title(f"{APP_NAME} (v{APP_VERSION})")
+        center_window(self.root, WINDOW_WIDTH, WINDOW_HEIGHT)
+        self.root.resizable(True, True)
+        self.root.minsize(650, 500)
+        if ICON_PATH.exists():
+            self.root.iconbitmap(ICON_PATH)
+
+    def _configure_styles(self):
+        style = ttk.Style(self.root)
+        style.configure("Treeview", background="white", foreground="black", rowheight=25, fieldbackground="white")
+        style.map("Treeview", background=[('selected', '#0078d7')])
+        style.configure("Treeview.Heading", font=('Calibri', 10, 'bold'), background="#E1E1E1", relief="groove", borderwidth=1)
+        # Style for the new placeholder label
+        style.configure("Placeholder.TLabel", foreground="grey", background="white", font=('Calibri', 11))
+        style.configure("TPanedWindow.Sash", background="#c0c0c0", sashwidth=6, relief="flat")
+        style.layout("Treeview", [('Treeview.treearea', {'sticky': 'nswe'})])
+
+    def _setup_ui(self):
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(1, weight=1)
+        self._create_menu()
+        self._create_file_selection_ui()
+        self.main_paned_window = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
+        self.main_paned_window.grid(row=1, column=0, sticky="nsew", padx=20, pady=10)
+        self._create_file_list_ui()
+        self._create_log_display_ui()
+        self.main_paned_window.add(self.file_list_frame, weight=3)
+        if self.log_visible:
+            self.main_paned_window.add(self.log_frame, weight=1)
+        self._create_conversion_ui()
+        self._create_progress_ui()
+        separator = ttk.Separator(self.root, orient='horizontal')
+        separator.grid(row=3, column=0, sticky='ew', padx=10, pady=10)
+        self.root.bind("<Escape>", self._clear_selection)
+        # Set initial placeholder state
+        self._update_placeholder_visibility()
+
+    def _create_menu(self):
+        menu = tk.Menu(self.root)
+        filemenu = tk.Menu(menu, tearoff=0)
+        menu.add_cascade(label="File", menu=filemenu)
+        filemenu.add_command(label="About", command=self.show_about)
+        filemenu.add_command(label="License", command=self.show_license)
+        filemenu.add_separator()
+        filemenu.add_command(label="Exit", command=self.root.quit)
+        self.root.config(menu=menu)
+
+    def _create_file_selection_ui(self):
+        frame = ttk.Frame(self.root, padding="10 10 0 0")
+        frame.grid(row=0, column=0, sticky="ew", padx=10)
+        self.add_files_btn = ttk.Button(frame, text="Add PDF(s)", command=self._add_files)
+        self.add_files_btn.pack(side="left")
+        self.add_folder_btn = ttk.Button(frame, text="Add from Folder", command=self._add_from_folder)
+        self.add_folder_btn.pack(side="left", padx=5)
+        self.clear_list_btn = ttk.Button(frame, text="Clear List", command=self._clear_list)
+        self.clear_list_btn.pack(side="right", padx=(0, 10))
+        self.remove_selected_btn = ttk.Button(frame, text="Remove Selected", command=self._remove_selected_files)
+        self.remove_selected_btn.pack(side="right", padx=(0, 5))
+
+    def _create_file_list_ui(self):
+        self.file_list_frame = ttk.Frame(self.main_paned_window, height=MIN_PANE_HEIGHT, relief="solid", borderwidth=1, padding=2)
+        self.file_list_frame.grid_propagate(False)
+        self.file_list_frame.grid_rowconfigure(0, weight=1)
+        self.file_list_frame.grid_columnconfigure(0, weight=1)
+        columns = ("sn", "name", "size", "path", "status")
+        self.file_tree = ttk.Treeview(self.file_list_frame, columns=columns, show="headings", height=10)
+        self.file_tree.heading("sn", text="S.N.")
+        self.file_tree.heading("name", text="File Name")
+        self.file_tree.heading("size", text="File Size")
+        self.file_tree.heading("path", text="File Path")
+        self.file_tree.heading("status", text="Status")
+        self.file_tree.column("sn", width=30, stretch=False, anchor="center")
+        self.file_tree.column("name", width=150, stretch=False)
+        self.file_tree.column("size", width=70, stretch=False, anchor="center")
+        self.file_tree.column("path", width=235, stretch=False)
+        self.file_tree.column("status", width=100, stretch=False, anchor="center")
+        self.file_tree.tag_configure('oddrow', background='#F0F0F0')
+        self.file_tree.tag_configure('evenrow', background='white')
+        self.file_tree.grid(row=0, column=0, sticky="nsew")
+        self.file_tree.drop_target_register(DND_FILES)
+        self.file_tree.dnd_bind('<<Drop>>', self._handle_drop)
+        self.context_menu = tk.Menu(self.file_tree, tearoff=0)
+        self.context_menu.add_command(label="Remove File", command=self._remove_selected_files)
+        self.file_tree.bind("<Button-3>", self._show_context_menu)
+        v_scroll = ttk.Scrollbar(self.file_list_frame, orient=tk.VERTICAL, command=self.file_tree.yview)
+        v_scroll.grid(row=0, column=1, sticky="ns")
+        self.file_tree.configure(yscrollcommand=v_scroll.set)
+        h_scroll = ttk.Scrollbar(self.file_list_frame, orient=tk.HORIZONTAL, command=self.file_tree.xview)
+        h_scroll.grid(row=1, column=0, sticky="ew")
+        self.file_tree.configure(xscrollcommand=h_scroll.set)
+        
+        # Create the placeholder label
+        placeholder_text = "Drag and drop PDF files here,\nor use the buttons above to add them."
+        self.placeholder_label = ttk.Label(
+            self.file_list_frame,
+            text=placeholder_text,
+            style="Placeholder.TLabel",
+            justify="center"
+        )
+
+    def _create_conversion_ui(self):
+        frame = ttk.Frame(self.root, padding="10 5 10 0")
+        frame.grid(row=2, column=0, sticky="ew", padx=10)
+        frame.grid_columnconfigure(1, weight=1)
+        self.output_path_label = ttk.Label(frame, text="Output Folder: Not Selected")
+        self.output_path_label.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.save_folder_btn = ttk.Button(frame, text="Output Folder", command=self._select_output_folder)
+        self.save_folder_btn.grid(row=0, column=2, sticky="e", padx=(0, 5))
+        combo_label = ttk.Label(frame, text="Conversion Format:")
+        combo_label.grid(row=1, column=0, sticky="w", pady=(10,0))
+        self.combobox = ttk.Combobox(frame, values=list(PDFA_MAP.keys()), width=20, state="readonly")
+        self.combobox.set(DEFAULT_PDFA_VERSION)
+        self.combobox.grid(row=1, column=1, sticky="w", pady=(10,0))
+        actions_frame = ttk.Frame(frame)
+        actions_frame.grid(row=1, column=2, sticky="e", pady=(10,0))
+        self.log_toggle_btn = ttk.Button(actions_frame, text="Show Log ▼", command=self._toggle_log_display)
+        self.log_toggle_btn.pack(side="left")
+        self.convert_btn = ttk.Button(actions_frame, text="Convert PDF(s)", command=self._start_conversion)
+        self.convert_btn.pack(side="left", padx=(5, 5))
+
+    def _create_progress_ui(self):
+        frame = ttk.Frame(self.root, padding="10 0 10 5")
+        frame.grid(row=4, column=0, sticky="ew", padx=10)
+        frame.grid_columnconfigure(0, weight=1)
+        self.status_label = ttk.Label(frame, text="Status: Idle")
+        self.status_label.grid(row=0, column=0, sticky="w")
+        self.progress_bar = ttk.Progressbar(frame, orient='horizontal', mode='determinate')
+        self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(5,0))
+
+    def _create_log_display_ui(self):
+        self.log_frame = ttk.Frame(self.main_paned_window, height=MIN_PANE_HEIGHT, relief="solid", borderwidth=1, padding=2)
+        self.log_frame.grid_propagate(False)
+        self.log_frame.grid_rowconfigure(0, weight=1)
+        self.log_frame.grid_columnconfigure(0, weight=1)
+        self.log_display = scrolledtext.ScrolledText(self.log_frame, wrap=tk.WORD, height=8, relief="flat", borderwidth=0)
+        self.log_display.configure(font=("Courier New", 8), state='disabled')
+        self.log_display.grid(row=0, column=0, sticky="nsew")
+
+    def _update_placeholder_visibility(self):
+        """Shows or hides the placeholder text based on whether the file list is empty."""
+        if not self.files_to_convert:
+            # List is empty, so show the placeholder centered in the frame
+            self.placeholder_label.place(relx=0.5, rely=0.5, anchor="center")
+        else:
+            # List has files, so hide the placeholder
+            self.placeholder_label.place_forget()
+
+    def _toggle_log_display(self):
+        if self.log_visible:
+            self.main_paned_window.forget(self.log_frame)
+            self.log_toggle_btn.configure(text="Show Log ▼")
+            self.log_visible = False
+        else:
+            self.main_paned_window.add(self.log_frame, weight=1)
+            self.log_toggle_btn.configure(text="Hide Log ▲")
+            self.log_visible = True
+
+    def _show_context_menu(self, event):
+        iid = self.file_tree.identify_row(event.y)
+        if iid:
+            if iid not in self.file_tree.selection():
+                self.file_tree.selection_set(iid)
+            self.context_menu.post(event.x_root, event.y_root)
+
+    def _clear_selection(self, event=None):
+        self.file_tree.selection_remove(self.file_tree.selection())
+
+    def _redirect_output(self):
+        redirector = TextRedirector(self.log_display)
+        sys.stdout = redirector
+        sys.stderr = redirector
+        print(f"Welcome to {APP_NAME}!\n")
     
-    # Select output folder
-    parent_dir = os.path.dirname(input_dir)
-    output_dir = filedialog.askdirectory(title="Select Output Folder for PDF/A Files", initialdir=parent_dir)
-    if not output_dir:
-        print("No output folder selected.\n")
-        return
+    def _select_output_folder(self):
+        if self.is_converting: return
+        output_dir_str = filedialog.askdirectory(title="Select a folder to save converted files")
+        if output_dir_str:
+            self.output_directory = Path(output_dir_str)
+            display_path = self._truncate_path(self.output_directory)
+            self.output_path_label.config(text=f"Output Folder: {display_path}")
+            print(f"Output folder set to: {self.output_directory}\n")
 
-    # Find PDF files directly inside input folder
-    pdf_files = []
-    for f in os.listdir(input_dir):
-        file_path = os.path.join(input_dir, f)
-        if os.path.isfile(file_path) and f.lower().endswith('.pdf'):
-            pdf_files.append(f)
+    def _truncate_path(self, path: Path, max_len: int = 50) -> str:
+        path_str = str(path)
+        if len(path_str) > max_len:
+            return f"...{path_str[-max_len:]}"
+        return path_str
 
-    if not pdf_files:
-        print("No PDF files found in the selected input folder.")
-        return
+    def _write_to_log(self, message: str):
+        self.log_display.configure(state='normal')
+        self.log_display.insert(tk.END, message)
+        self.log_display.see(tk.END)
+        self.log_display.configure(state='disabled')
+        
+    def _format_size(self, size_bytes: int) -> str:
+        if size_bytes < 1024: return f"{size_bytes} B"
+        elif size_bytes < 1024**2: return f"{size_bytes/1024:.1f} KB"
+        elif size_bytes < 1024**3: return f"{size_bytes/1024**2:.1f} MB"
+        else: return f"{size_bytes/1024**3:.1f} GB"
+
+    def _update_file_list_display(self):
+        for item in self.file_tree.get_children():
+            self.file_tree.delete(item)
+        self.path_to_iid_map.clear()
+        for i, fpath in enumerate(self.files_to_convert, start=1):
+            try:
+                size_formatted = self._format_size(fpath.stat().st_size)
+            except FileNotFoundError:
+                size_formatted = "N/A"
+            tag = 'oddrow' if i % 2 != 0 else 'evenrow'
+            values = (i, fpath.name, size_formatted, str(fpath.parent), '-')
+            iid = self.file_tree.insert('', tk.END, values=values, tags=(tag,))
+            self.path_to_iid_map[fpath] = iid
+
+    def _add_paths_to_list(self, paths: Iterable[str]):
+        added_count = 0
+        for path_str in paths:
+            fpath = Path(path_str)
+            if fpath.is_file() and fpath.suffix.lower() == '.pdf' and fpath not in self.files_to_convert:
+                self.files_to_convert.append(fpath)
+                added_count += 1
+        if added_count > 0: self._update_file_list_display()
+        self._update_placeholder_visibility()
+
+    def _add_files(self):
+        filepaths = filedialog.askopenfilenames(title="Select PDF files", filetypes=[("PDF files", "*.pdf")])
+        if filepaths: self._add_paths_to_list(filepaths)
+
+    def _add_from_folder(self):
+        folder_path = filedialog.askdirectory(title="Select a folder containing PDFs")
+        if not folder_path: return
+        self._add_paths_to_list(str(p) for p in sorted(Path(folder_path).glob("*.pdf")))
     
-    # Process each PDF
-    for pdf_file in pdf_files:
-        input_pdf = os.path.join(input_dir, pdf_file)
-        pdf_filename, ext = os.path.splitext(pdf_file)
-        output_name = f"{pdf_filename}.pdf"
-        output_pdf = os.path.join(output_dir, output_name)
+    def _handle_drop(self, event):
+        paths = self.root.tk.splitlist(event.data)
+        self._add_paths_to_list(paths)
+
+    def _clear_list(self):
+        if self.is_converting: return
+        self.files_to_convert.clear()
+        self._update_file_list_display()
+        print("File list cleared.\n")
+        self._update_placeholder_visibility()
+    
+    def _remove_selected_files(self):
+        if self.is_converting: return
+        selected_iids = self.file_tree.selection()
+        if not selected_iids:
+            messagebox.showinfo("Information", "Please select one or more files to remove.", parent=self.root)
+            return
+        paths_to_remove = {Path(self.file_tree.item(iid, 'values')[3]) / self.file_tree.item(iid, 'values')[1] for iid in selected_iids}
+        self.files_to_convert = [path for path in self.files_to_convert if path not in paths_to_remove]
+        self._update_file_list_display()
+        print(f"Removed {len(paths_to_remove)} file(s) from the list.\n")
+        self._update_placeholder_visibility()
+    
+    def _toggle_controls_state(self, state: str):
+        self.add_files_btn.config(state=state)
+        self.add_folder_btn.config(state=state)
+        self.clear_list_btn.config(state=state)
+        self.remove_selected_btn.config(state=state)
+        self.convert_btn.config(state=state)
+        self.save_folder_btn.config(state=state)
+        self.combobox.config(state=state if state == 'normal' else 'readonly')
+
+    def _start_conversion(self):
+        if self.is_converting: return
+        if not self.files_to_convert:
+            messagebox.showinfo("No Files", "Please add files to the list before converting.", parent=self.root)
+            return
+        if not self.output_directory:
+            messagebox.showerror("Error", "Please select an output folder using the 'Output Folder' button first.", parent=self.root)
+            return
+
+        conflict_choice = "overwrite"
+        conflicting_files = [p.name for p in self.files_to_convert if (self.output_directory / p.name).exists()]
+        
+        if conflicting_files:
+            dialog = BatchConfirmDialog(self.root, "Confirm File Copies", conflicting_files)
+            choice = dialog.result
+            if choice == "cancel":
+                print("Conversion cancelled by user.\n")
+                return
+            conflict_choice = choice
+        
+        self.is_converting = True
+        self._toggle_controls_state('disabled')
+        self._update_file_list_display()
+        
+        self.progress_bar['value'] = 0
+        self.progress_bar['maximum'] = len(self.files_to_convert)
+
+        self.comm_queue = queue.Queue()
+        worker_thread = threading.Thread(
+            target=self._conversion_worker,
+            args=(self.files_to_convert, self.output_directory, PDFA_MAP[self.combobox.get()], self.comm_queue, conflict_choice)
+        )
+        worker_thread.start()
+        self.root.after(100, self._check_progress_queue)
+
+    def _check_progress_queue(self):
         try:
-            print(f"Converting '{pdf_file}' to PDF/A...")
-            pdf_to_pdfa(input_pdf, output_pdf)
-        except Exception as e:
-            print(f"Error converting '{pdf_file}': {e}")
+            while True:
+                message = self.comm_queue.get_nowait()
+                msg_type = message.get('type')
+                
+                if msg_type == 'log':
+                    self._write_to_log(message['message'])
+                elif msg_type == 'progress':
+                    self.status_label.config(text=f"Converting {message['current']}/{message['total']}: {message['filename']}")
+                    self.progress_bar['value'] = message['current']
+                elif msg_type in ('success', 'error'):
+                    path = message.get('path')
+                    iid = self.path_to_iid_map.get(path)
+                    if iid:
+                        status_text = "Completed" if msg_type == 'success' else "Failed"
+                        self.file_tree.set(iid, column='status', value=status_text)
+                        
+                    if msg_type == 'error':
+                        self._write_to_log(f"--- ERROR converting '{path.name}'. See details above. ---\n")
+                elif msg_type == 'complete':
+                    self.is_converting = False
+                    self._toggle_controls_state('normal')
+                    self.status_label.config(text=f"Status: Conversion complete.")
+                    self._write_to_log(f"\n--- Conversion Complete ---\n{message['summary']}\n")
+                    messagebox.showinfo("Success", message['summary'], parent=self.root)
+                    return
+        except queue.Empty:
+            pass
+        finally:
+            if self.is_converting:
+                self.root.after(100, self._check_progress_queue)
 
-def show_about():
-    messagebox.showinfo("About",
-                        "Application Name: str-pdf\n"
-                        "Version: 1.0.0\n"
-                        "Company: str.ucture GmbH\n"
-                        "Website: https://str-ucture.com \n"
-                        "Contact: info@str-ucture.com\n"
-                        "Developed by: @shailesh-stha")
+    def _conversion_worker(self, files: List[Path], output_dir: Path, version_flag: str, q: queue.Queue, conflict_choice: str):
+        """Worker thread logic, now with safe in-place overwrite handling."""
+        total_files = len(files)
+        success_count = 0
+        q.put({'type': 'log', 'message': f"Starting conversion for {total_files} file(s)...\nOutput folder: {output_dir}\n\n"})
+        
+        for i, input_path in enumerate(files):
+            q.put({'type': 'progress', 'current': i + 1, 'total': total_files, 'filename': input_path.name})
+            
+            temp_output_path = None
+            try:
+                final_output_path = output_dir / input_path.name
+                is_inplace_overwrite = False
+                
+                if final_output_path.exists():
+                    if conflict_choice == "copy":
+                        new_name = f"{input_path.stem}-pdf-a-copy.pdf"
+                        final_output_path = output_dir / new_name
+                        q.put({'type': 'log', 'message': f"Creating a copy: '{new_name}'.\n"})
+                    elif conflict_choice == "overwrite":
+                        if input_path.resolve() == final_output_path.resolve():
+                            is_inplace_overwrite = True
+                            q.put({'type': 'log', 'message': f"Performing safe in-place overwrite for: '{final_output_path.name}'.\n"})
+                        else:
+                            q.put({'type': 'log', 'message': f"Overwriting existing file: '{final_output_path.name}'.\n"})
+                
+                if is_inplace_overwrite:
+                    with tempfile.NamedTemporaryFile(mode='wb', dir=output_dir, delete=False, suffix=".pdf") as tmp_file:
+                        temp_output_path = Path(tmp_file.name)
+                    conversion_target_path = temp_output_path
+                else:
+                    conversion_target_path = final_output_path
 
-def show_license():
-    messagebox.showinfo("License",
-                        "This software is licensed under the GNU AGPLv3.\n"
-                        "This product includes Ghostscript, free software licensed under the GPLv3.\n"
-                        "Ghostscript copyright © 1988-2023 Artifex Software, Inc.\n"
-                        "https://www.gnu.org/licenses/agpl-3.0.html")
+                self._pdf_to_pdfa(input_path, conversion_target_path, version_flag, q)
+                
+                if is_inplace_overwrite:
+                    os.replace(temp_output_path, final_output_path)
+                    temp_output_path = None
 
-# GUI Setup
-root = tk.Tk()
-root.title("PDF to PDF/A Converter")
-center_window(root, 600, 350)
+                q.put({'type': 'success', 'path': input_path})
+                success_count += 1
+            except Exception as e:
+                q.put({'type': 'error', 'path': input_path, 'message': str(e)})
+            finally:
+                if temp_output_path and temp_output_path.exists():
+                    temp_output_path.unlink()
+        
+        summary = f"{success_count} of {total_files} files converted successfully."
+        q.put({'type': 'complete', 'summary': summary})
 
-# root.geometry("600x350")
-root.resizable(False, False)
-root.iconbitmap("utils/str.ico")
+    def _pdf_to_pdfa(self, input_pdf_path: Path, output_pdf_path: Path, version_flag: str, q: queue.Queue):
+        args = [ "gs", "-dSAFER", "-dBATCH", "-dNOPAUSE", version_flag, "-sDEVICE=pdfwrite", "-sColorConversionStrategy=UseDeviceIndependentColor", "-dPDFACompatibilityPolicy=1", "-dCompressFonts=false", f"-sOutputFile={output_pdf_path}", str(input_pdf_path) ]
+        q.put({'type': 'log', 'message': f"Converting '{input_pdf_path.name}'...\n"})
+        ghostscript.Ghostscript(*args)
+        q.put({'type': 'log', 'message': f" -> Saved to '{output_pdf_path.name}'\n\n"})
+    
+    def run_auth_check(self):
+        if not check_authentication(AUTH_URL, AUTH_FILE_PATH):
+            messagebox.showerror("Authentication Failed", "Please verify the authentication key.", parent=self.root)
+            self.root.after(100, self.root.destroy)
+            return False
+        return True
 
-menu = tk.Menu(root)
-filemenu = tk.Menu(menu, tearoff=0)
-menu.add_cascade(label="File", menu=filemenu)
-filemenu.add_command(label="About", command=show_about)
-filemenu.add_command(label="License", command=show_license)
-filemenu.add_separator()
-filemenu.add_command(label="Exit", command=root.quit) 
-root.config(menu=menu)
+    def _copy_to_clipboard(self, window: tk.Toplevel, text_to_copy: str):
+        window.clipboard_clear()
+        window.clipboard_append(text_to_copy)
+        print(f"Copied to clipboard: {text_to_copy}")
 
-# Define a top frame for controls display
-top_frame = tk.Frame(root)
-top_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
-top_frame.grid_columnconfigure(0, weight=1)
-top_frame.grid_columnconfigure(1, weight=0)
+    def _center_child_window(self, child_window: tk.Toplevel):
+        child_window.update_idletasks()
+        root_x, root_y = self.root.winfo_x(), self.root.winfo_y()
+        root_width, root_height = self.root.winfo_width(), self.root.winfo_height()
+        child_width, child_height = child_window.winfo_width(), child_window.winfo_height()
+        x = root_x + (root_width - child_width) // 2
+        y = root_y + (root_height - child_height) // 2
+        child_window.geometry(f"+{x}+{y}")
+        
+    def show_about(self):
+        about_win = tk.Toplevel(self.root)
+        about_win.title("About")
+        about_win.resizable(False, False)
+        about_win.transient(self.root)
+        about_win.grab_set()
+        frame = tk.Frame(about_win, padx=20, pady=10)
+        frame.pack(expand=True, fill="both")
+        info = { "Application Name:": "str-pdf", "Version:": "1.1.0", "Company:": "str.ucture GmbH", "Website:": "https://str-ucture.com", "Contact:": "info@str-ucture.com", "Developed by:": "@shailesh-stha" }
+        try:
+            img = Image.open(COPY_ICON_PATH).resize((16, 16), Image.Resampling.LANCZOS)
+            self.copy_icon = ImageTk.PhotoImage(img)
+        except FileNotFoundError:
+            self.copy_icon = None
+        link_font = tkfont.Font(family="Helvetica", size=10, underline=True)
+        for i, (key, value) in enumerate(info.items()):
+            key_label = tk.Label(frame, text=key, justify="left")
+            key_label.grid(row=i, column=0, sticky="ne", pady=2, padx=5)
+            if key == "Website:" or key == "Developed by:":
+                url = "https://github.com/shailesh-stha" if key == "Developed by:" else value
+                value_label = tk.Label(frame, text=value, fg="blue", cursor="hand2", font=link_font)
+                value_label.bind("<Button-1>", lambda e, u=url: webbrowser.open_new_tab(u))
+                value_label.grid(row=i, column=1, sticky="nw", pady=2, padx=5)
+            elif key == "Contact:":
+                contact_frame = tk.Frame(frame)
+                contact_frame.grid(row=i, column=1, sticky="nw")
+                email_label = tk.Label(contact_frame, text=value)
+                email_label.pack(side="left", pady=2, padx=5)
+                if self.copy_icon:
+                    copy_button = tk.Button(contact_frame, image=self.copy_icon, borderwidth=0, cursor="hand2", command=lambda v=value: self._copy_to_clipboard(about_win, v))
+                else:
+                    copy_button = ttk.Button(contact_frame, text="Copy", width=5, command=lambda v=value: self._copy_to_clipboard(about_win, v))
+                copy_button.pack(side="left", padx=(5, 0))
+            else:
+                value_label = tk.Label(frame, text=value, justify="left")
+                value_label.grid(row=i, column=1, sticky="nw", pady=2, padx=5)
+        ok_button = ttk.Button(frame, text="OK", command=about_win.destroy)
+        ok_button.grid(row=len(info), column=0, columnspan=2, pady=(15, 5))
+        self._center_child_window(about_win)
+        self.root.wait_window(about_win)
 
-# Define controls
-combo_label = tk.Label(top_frame, text="Conversion Format:")
-combo_label.grid(row=0, column=1, sticky='w', padx=(5, 0), pady=5)
+    def show_license(self):
+        license_win = tk.Toplevel(self.root)
+        license_win.title("License")
+        license_win.resizable(False, False)
+        license_win.transient(self.root)
+        license_win.grab_set()
+        frame = tk.Frame(license_win, padx=20, pady=10)
+        frame.pack(expand=True, fill="both")
+        license_text = ( "This software is licensed under the GNU AGPLv3.\n\n" "This product includes Ghostscript, free software licensed under the GPLv3.\n" "Ghostscript copyright © 1988-2023 Artifex Software, Inc.\n\n" "For more details, please visit:\n" "https://www.gnu.org/licenses/agpl-3.html" )
+        text_label = tk.Label(frame, text=license_text, justify="left", wraplength=400)
+        text_label.pack(pady=(0, 15))
+        ok_button = ttk.Button(frame, text="OK", command=license_win.destroy)
+        ok_button.pack()
+        self._center_child_window(license_win)
+        self.root.wait_window(license_win)
 
-combobox = ttk.Combobox(top_frame, values=["PDF/A-1b", "PDF/A-2b", "PDF/A-3b"], width=20, state="readonly")
-combobox.set("PDF/A-2b")
-combobox.grid(row=0, column=2, sticky='e', padx=(10, 0), pady=5)
 
-# Set the PDF/A version based on the selected option
-def on_combobox_change(event):
-    selected = combobox.get()
-    global pdfa_version
-    if selected == "PDF/A-1b":
-        pdfa_version = "-dPDFA=1"
-    elif selected == "PDF/A-2b":
-        pdfa_version = "-dPDFA=2"
-    elif selected == "PDF/A-3b":
-        pdfa_version = "-dPDFA=3"
-
-# Set default value
-pdfa_version = "-dPDFA=2"
-combobox.bind("<<ComboboxSelected>>", on_combobox_change)
-
-btn_single_pdf = tk.Button(top_frame,
-                           text="Select a PDF and Convert",
-                           command=convert_single_file,
-                           width=30)
-btn_multiple_pdf = tk.Button(top_frame,
-                             text="Select a Folder and Convert all",
-                             command=convert_multiple_files,
-                             width=30)
-
-btn_single_pdf.grid(row=0, column=0, sticky='w', padx=(0, 10), pady=5)
-btn_multiple_pdf.grid(row=1, column=0, sticky='w', padx=(0, 10), pady=5)
-
-# Define a bottom frame for the log display
-log_frame = tk.Frame(root)
-log_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
-
-root.grid_rowconfigure(1, weight=1)
-root.grid_columnconfigure(0, weight=1)
-
-log_display = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, height=10)
-log_display.configure(font=("Courier New", 8))
-log_display.pack(fill=tk.BOTH, expand=True)
-
-# Redirect print
-sys.stdout = TextRedirector(log_display)
-sys.stderr = TextRedirector(log_display)
-
-if stored_str_key != expected_str_key:
-    disable_frame(top_frame)
-    disable_frame(log_frame)
-    messagebox.showerror("Authentication Failed", "Please Verify the Authentication Key.")
-    sys.exit(1)
-
-root.mainloop()
+if __name__ == "__main__":
+    main_root = TkinterDnD.Tk()
+    app = PdfConverterApp(main_root)
+    main_root.after(100, app.run_auth_check)
+    main_root.mainloop()

@@ -13,16 +13,18 @@ import queue
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import tempfile # For safe in-place overwrites
 import os       # For the atomic replace operation
+import json     # For persisting settings
 
 # --- Constants ---
 APP_NAME = "PDF to PDF/A Converter"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0" # Version updated to reflect changes
 WINDOW_WIDTH = 650
 WINDOW_HEIGHT = 550
 AUTH_URL = "https://raw.githubusercontent.com/str-ucture/str-key/refs/heads/main/key_25.txt"
 AUTH_FILE_PATH = Path("utils/auth.bin")
 ICON_PATH = Path("utils/str.ico")
 COPY_ICON_PATH = Path("utils/btn_copy.ico")
+SETTINGS_FILE = Path("settings.json") # For persisting user settings
 MIN_PANE_HEIGHT = 75
 
 PDFA_MAP = {
@@ -117,12 +119,17 @@ class PdfConverterApp:
         self.log_visible = False
         self.is_converting = False
         self.output_directory: Path = None
-        self.placeholder_label = None # For empty list message
+        self.placeholder_label = None
+        
+        # --- New attributes for added features ---
+        self.cancel_event = threading.Event()
+        self.overwrite_originals_var = tk.BooleanVar(value=False)
         
         self._setup_window()
         self._configure_styles()
         self._setup_ui()
         self._redirect_output()
+        self._load_settings() # Load settings on startup
 
     def _setup_window(self):
         self.root.title(f"{APP_NAME} (v{APP_VERSION})")
@@ -131,13 +138,14 @@ class PdfConverterApp:
         self.root.minsize(650, 500)
         if ICON_PATH.exists():
             self.root.iconbitmap(ICON_PATH)
+        # --- New: Handle window closing to save settings ---
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
 
     def _configure_styles(self):
         style = ttk.Style(self.root)
         style.configure("Treeview", background="white", foreground="black", rowheight=25, fieldbackground="white")
         style.map("Treeview", background=[('selected', '#0078d7')])
         style.configure("Treeview.Heading", font=('Calibri', 10, 'bold'), background="#E1E1E1", relief="groove", borderwidth=1)
-        # Style for the new placeholder label
         style.configure("Placeholder.TLabel", foreground="grey", background="white", font=('Calibri', 11))
         style.configure("TPanedWindow.Sash", background="#c0c0c0", sashwidth=6, relief="flat")
         style.layout("Treeview", [('Treeview.treearea', {'sticky': 'nswe'})])
@@ -159,7 +167,6 @@ class PdfConverterApp:
         separator = ttk.Separator(self.root, orient='horizontal')
         separator.grid(row=3, column=0, sticky='ew', padx=10, pady=10)
         self.root.bind("<Escape>", self._clear_selection)
-        # Set initial placeholder state
         self._update_placeholder_visibility()
 
     def _create_menu(self):
@@ -169,7 +176,7 @@ class PdfConverterApp:
         filemenu.add_command(label="About", command=self.show_about)
         filemenu.add_command(label="License", command=self.show_license)
         filemenu.add_separator()
-        filemenu.add_command(label="Exit", command=self.root.quit)
+        filemenu.add_command(label="Exit", command=self._on_closing)
         self.root.config(menu=menu)
 
     def _create_file_selection_ui(self):
@@ -215,15 +222,8 @@ class PdfConverterApp:
         h_scroll = ttk.Scrollbar(self.file_list_frame, orient=tk.HORIZONTAL, command=self.file_tree.xview)
         h_scroll.grid(row=1, column=0, sticky="ew")
         self.file_tree.configure(xscrollcommand=h_scroll.set)
-        
-        # Create the placeholder label
         placeholder_text = "Drag and drop PDF files here,\nor use the buttons above to add them."
-        self.placeholder_label = ttk.Label(
-            self.file_list_frame,
-            text=placeholder_text,
-            style="Placeholder.TLabel",
-            justify="center"
-        )
+        self.placeholder_label = ttk.Label(self.file_list_frame, text=placeholder_text, style="Placeholder.TLabel", justify="center")
 
     def _create_conversion_ui(self):
         frame = ttk.Frame(self.root, padding="10 5 10 0")
@@ -233,17 +233,26 @@ class PdfConverterApp:
         self.output_path_label.grid(row=0, column=0, columnspan=2, sticky="ew")
         self.save_folder_btn = ttk.Button(frame, text="Output Folder", command=self._select_output_folder)
         self.save_folder_btn.grid(row=0, column=2, sticky="e", padx=(0, 5))
+        # --- New: Overwrite checkbox ---
+        self.overwrite_checkbox = ttk.Checkbutton(
+            frame, text="Overwrite original files", variable=self.overwrite_originals_var,
+            command=self._toggle_output_folder_state
+        )
+        self.overwrite_checkbox.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5,0))
         combo_label = ttk.Label(frame, text="Conversion Format:")
-        combo_label.grid(row=1, column=0, sticky="w", pady=(10,0))
+        combo_label.grid(row=2, column=0, sticky="w", pady=(10,0))
         self.combobox = ttk.Combobox(frame, values=list(PDFA_MAP.keys()), width=20, state="readonly")
         self.combobox.set(DEFAULT_PDFA_VERSION)
-        self.combobox.grid(row=1, column=1, sticky="w", pady=(10,0))
+        self.combobox.grid(row=2, column=1, sticky="w", pady=(10,0))
         actions_frame = ttk.Frame(frame)
-        actions_frame.grid(row=1, column=2, sticky="e", pady=(10,0))
+        actions_frame.grid(row=2, column=2, sticky="e", pady=(10,0))
         self.log_toggle_btn = ttk.Button(actions_frame, text="Show Log ▼", command=self._toggle_log_display)
         self.log_toggle_btn.pack(side="left")
         self.convert_btn = ttk.Button(actions_frame, text="Convert PDF(s)", command=self._start_conversion)
         self.convert_btn.pack(side="left", padx=(5, 5))
+        # --- New: Cancel button, initially hidden ---
+        self.cancel_btn = ttk.Button(actions_frame, text="Cancel", command=self._cancel_conversion)
+        # self.cancel_btn will be packed later when conversion starts
 
     def _create_progress_ui(self):
         frame = ttk.Frame(self.root, padding="10 0 10 5")
@@ -264,13 +273,73 @@ class PdfConverterApp:
         self.log_display.grid(row=0, column=0, sticky="nsew")
 
     def _update_placeholder_visibility(self):
-        """Shows or hides the placeholder text based on whether the file list is empty."""
         if not self.files_to_convert:
-            # List is empty, so show the placeholder centered in the frame
             self.placeholder_label.place(relx=0.5, rely=0.5, anchor="center")
         else:
-            # List has files, so hide the placeholder
             self.placeholder_label.place_forget()
+
+    # --- New Methods for Added Features ---
+    
+    def _on_closing(self):
+        """Handle window close event to save settings."""
+        if self.is_converting:
+            if messagebox.askyesno("Confirm Exit", "A conversion is in progress. Are you sure you want to exit?", parent=self.root):
+                self._cancel_conversion()
+                self._save_settings()
+                self.root.destroy()
+        else:
+            self._save_settings()
+            self.root.destroy()
+            
+    def _save_settings(self):
+        """Saves current settings to a JSON file."""
+        settings = {
+            "output_directory": str(self.output_directory) if self.output_directory else "",
+            "pdfa_version": self.combobox.get()
+        }
+        try:
+            SETTINGS_FILE.write_text(json.dumps(settings, indent=4))
+        except Exception as e:
+            print(f"Warning: Could not save settings. {e}")
+
+    def _load_settings(self):
+        """Loads settings from JSON file on startup."""
+        try:
+            if SETTINGS_FILE.exists():
+                settings = json.loads(SETTINGS_FILE.read_text())
+                output_dir = settings.get("output_directory")
+                if output_dir and Path(output_dir).is_dir():
+                    self.output_directory = Path(output_dir)
+                    display_path = self._truncate_path(self.output_directory)
+                    self.output_path_label.config(text=f"Output Folder: {display_path}")
+
+                pdfa_version = settings.get("pdfa_version")
+                if pdfa_version in PDFA_MAP:
+                    self.combobox.set(pdfa_version)
+        except Exception as e:
+            print(f"Warning: Could not load settings. {e}")
+
+    def _toggle_output_folder_state(self):
+        """Disables the output folder button when overwrite is checked."""
+        if self.overwrite_originals_var.get():
+            self.save_folder_btn.config(state="disabled")
+            self.output_path_label.config(text="Output: Overwriting original files")
+        else:
+            self.save_folder_btn.config(state="normal")
+            if self.output_directory:
+                display_path = self._truncate_path(self.output_directory)
+                self.output_path_label.config(text=f"Output Folder: {display_path}")
+            else:
+                self.output_path_label.config(text="Output Folder: Not Selected")
+
+    def _cancel_conversion(self):
+        """Signals the worker thread to stop."""
+        if self.is_converting:
+            print("\n--- Cancellation requested by user. Finishing current file... ---\n")
+            self.cancel_event.set()
+            self.cancel_btn.config(state="disabled", text="Cancelling...")
+
+    # --- End of New Methods ---
 
     def _toggle_log_display(self):
         if self.log_visible:
@@ -386,44 +455,66 @@ class PdfConverterApp:
         self.add_folder_btn.config(state=state)
         self.clear_list_btn.config(state=state)
         self.remove_selected_btn.config(state=state)
-        self.convert_btn.config(state=state)
         self.save_folder_btn.config(state=state)
         self.combobox.config(state=state if state == 'normal' else 'readonly')
+        self.overwrite_checkbox.config(state=state)
+        # Re-apply logic for output folder button if state is 'normal'
+        if state == 'normal':
+             self._toggle_output_folder_state()
 
     def _start_conversion(self):
         if self.is_converting: return
         if not self.files_to_convert:
             messagebox.showinfo("No Files", "Please add files to the list before converting.", parent=self.root)
             return
-        if not self.output_directory:
-            messagebox.showerror("Error", "Please select an output folder using the 'Output Folder' button first.", parent=self.root)
+            
+        is_overwrite_mode = self.overwrite_originals_var.get()
+        if not is_overwrite_mode and not self.output_directory:
+            messagebox.showerror("Error", "Please select an output folder or check 'Overwrite original files'.", parent=self.root)
             return
 
-        conflict_choice = "overwrite"
-        conflicting_files = [p.name for p in self.files_to_convert if (self.output_directory / p.name).exists()]
-        
-        if conflicting_files:
-            dialog = BatchConfirmDialog(self.root, "Confirm File Copies", conflicting_files)
-            choice = dialog.result
-            if choice == "cancel":
-                print("Conversion cancelled by user.\n")
-                return
-            conflict_choice = choice
+        conflict_choice = "overwrite" # Default
+        if not is_overwrite_mode:
+            conflicting_files = [p.name for p in self.files_to_convert if (self.output_directory / p.name).exists()]
+            if conflicting_files:
+                dialog = BatchConfirmDialog(self.root, "Confirm File Copies", conflicting_files)
+                choice = dialog.result
+                if choice == "cancel":
+                    print("Conversion cancelled by user.\n")
+                    return
+                conflict_choice = choice
         
         self.is_converting = True
+        self.cancel_event.clear() # Reset cancel event
         self._toggle_controls_state('disabled')
+        self.convert_btn.pack_forget() # Hide convert button
+        self.cancel_btn.pack(side="left", padx=(5, 5)) # Show cancel button
+        self.cancel_btn.config(state="normal", text="Cancel")
         self._update_file_list_display()
-        
         self.progress_bar['value'] = 0
         self.progress_bar['maximum'] = len(self.files_to_convert)
 
         self.comm_queue = queue.Queue()
         worker_thread = threading.Thread(
             target=self._conversion_worker,
-            args=(self.files_to_convert, self.output_directory, PDFA_MAP[self.combobox.get()], self.comm_queue, conflict_choice)
+            args=(
+                self.files_to_convert, self.output_directory, PDFA_MAP[self.combobox.get()],
+                self.comm_queue, conflict_choice, self.cancel_event, is_overwrite_mode
+            )
         )
         worker_thread.start()
         self.root.after(100, self._check_progress_queue)
+        
+    def _finalize_conversion(self, summary_msg: str, show_popup: bool = True):
+        """Resets the UI after conversion is complete or cancelled."""
+        self.is_converting = False
+        self._toggle_controls_state('normal')
+        self.cancel_btn.pack_forget()
+        self.convert_btn.pack(side="left", padx=(5, 5))
+        self.status_label.config(text=f"Status: {summary_msg}")
+        self._write_to_log(f"\n--- Conversion Finished ---\n{summary_msg}\n")
+        if show_popup:
+            messagebox.showinfo("Process Finished", summary_msg, parent=self.root)
 
     def _check_progress_queue(self):
         try:
@@ -442,50 +533,54 @@ class PdfConverterApp:
                     if iid:
                         status_text = "Completed" if msg_type == 'success' else "Failed"
                         self.file_tree.set(iid, column='status', value=status_text)
-                        
                     if msg_type == 'error':
                         self._write_to_log(f"--- ERROR converting '{path.name}'. See details above. ---\n")
                 elif msg_type == 'complete':
-                    self.is_converting = False
-                    self._toggle_controls_state('normal')
-                    self.status_label.config(text=f"Status: Conversion complete.")
-                    self._write_to_log(f"\n--- Conversion Complete ---\n{message['summary']}\n")
-                    messagebox.showinfo("Success", message['summary'], parent=self.root)
-                    return
+                    self._finalize_conversion(message['summary'])
+                    return # Stop checking the queue
+                elif msg_type == 'cancelled':
+                    self._finalize_conversion(message['summary'], show_popup=False)
+                    return # Stop checking the queue
         except queue.Empty:
             pass
         finally:
             if self.is_converting:
                 self.root.after(100, self._check_progress_queue)
 
-    def _conversion_worker(self, files: List[Path], output_dir: Path, version_flag: str, q: queue.Queue, conflict_choice: str):
-        """Worker thread logic, now with safe in-place overwrite handling."""
+    def _conversion_worker(self, files: List[Path], output_dir: Path, version_flag: str, q: queue.Queue, conflict_choice: str, cancel_event: threading.Event, is_overwrite_mode: bool):
         total_files = len(files)
         success_count = 0
-        q.put({'type': 'log', 'message': f"Starting conversion for {total_files} file(s)...\nOutput folder: {output_dir}\n\n"})
+        processed_count = 0
+        output_location_msg = "overwriting original files" if is_overwrite_mode else f"folder: {output_dir}"
+        q.put({'type': 'log', 'message': f"Starting conversion for {total_files} file(s)...\nOutput: {output_location_msg}\n\n"})
         
         for i, input_path in enumerate(files):
+            if cancel_event.is_set():
+                break
+
+            processed_count += 1
             q.put({'type': 'progress', 'current': i + 1, 'total': total_files, 'filename': input_path.name})
             
             temp_output_path = None
             try:
-                final_output_path = output_dir / input_path.name
-                is_inplace_overwrite = False
+                # Determine the correct output directory for this file
+                current_output_dir = input_path.parent if is_overwrite_mode else output_dir
+                final_output_path = current_output_dir / input_path.name
                 
-                if final_output_path.exists():
+                is_inplace_overwrite = (is_overwrite_mode or 
+                                       (conflict_choice == "overwrite" and input_path.resolve() == final_output_path.resolve()))
+                
+                if final_output_path.exists() and not is_overwrite_mode:
                     if conflict_choice == "copy":
                         new_name = f"{input_path.stem}-pdf-a-copy.pdf"
-                        final_output_path = output_dir / new_name
+                        final_output_path = current_output_dir / new_name
                         q.put({'type': 'log', 'message': f"Creating a copy: '{new_name}'.\n"})
-                    elif conflict_choice == "overwrite":
-                        if input_path.resolve() == final_output_path.resolve():
-                            is_inplace_overwrite = True
-                            q.put({'type': 'log', 'message': f"Performing safe in-place overwrite for: '{final_output_path.name}'.\n"})
-                        else:
-                            q.put({'type': 'log', 'message': f"Overwriting existing file: '{final_output_path.name}'.\n"})
-                
+                    elif conflict_choice == "overwrite" and not is_inplace_overwrite:
+                        q.put({'type': 'log', 'message': f"Overwriting existing file: '{final_output_path.name}'.\n"})
+
                 if is_inplace_overwrite:
-                    with tempfile.NamedTemporaryFile(mode='wb', dir=output_dir, delete=False, suffix=".pdf") as tmp_file:
+                    q.put({'type': 'log', 'message': f"Performing safe in-place overwrite for: '{final_output_path.name}'.\n"})
+                    with tempfile.NamedTemporaryFile(mode='wb', dir=current_output_dir, delete=False, suffix=".pdf") as tmp_file:
                         temp_output_path = Path(tmp_file.name)
                     conversion_target_path = temp_output_path
                 else:
@@ -505,8 +600,12 @@ class PdfConverterApp:
                 if temp_output_path and temp_output_path.exists():
                     temp_output_path.unlink()
         
-        summary = f"{success_count} of {total_files} files converted successfully."
-        q.put({'type': 'complete', 'summary': summary})
+        if cancel_event.is_set():
+            summary = f"Cancelled. {success_count} of {processed_count} file(s) processed."
+            q.put({'type': 'cancelled', 'summary': summary})
+        else:
+            summary = f"{success_count} of {total_files} files converted successfully."
+            q.put({'type': 'complete', 'summary': summary})
 
     def _pdf_to_pdfa(self, input_pdf_path: Path, output_pdf_path: Path, version_flag: str, q: queue.Queue):
         args = [ "gs", "-dSAFER", "-dBATCH", "-dNOPAUSE", version_flag, "-sDEVICE=pdfwrite", "-sColorConversionStrategy=UseDeviceIndependentColor", "-dPDFACompatibilityPolicy=1", "-dCompressFonts=false", f"-sOutputFile={output_pdf_path}", str(input_pdf_path) ]
@@ -543,7 +642,7 @@ class PdfConverterApp:
         about_win.grab_set()
         frame = tk.Frame(about_win, padx=20, pady=10)
         frame.pack(expand=True, fill="both")
-        info = { "Application Name:": "str-pdf", "Version:": "1.1.0", "Company:": "str.ucture GmbH", "Website:": "https://str-ucture.com", "Contact:": "info@str-ucture.com", "Developed by:": "@shailesh-stha" }
+        info = { "Application Name:": "str-pdf", "Version:": "1.2.0", "Company:": "str.ucture GmbH", "Website:": "https://str-ucture.com", "Contact:": "info@str-ucture.com", "Developed by:": "@shailesh-stha" }
         try:
             img = Image.open(COPY_ICON_PATH).resize((16, 16), Image.Resampling.LANCZOS)
             self.copy_icon = ImageTk.PhotoImage(img)

@@ -1,110 +1,55 @@
-# 🗂️ str-pdf (v1.1.0)
+# str-pdf
 
-**str-pdf** is a user-friendly desktop application for converting standard PDF files into the **PDF/A** format — a specialized version of PDF designed for the long-term archiving and preservation of electronic documents.
+Offline desktop conversion from PDF to PDF/A with independent veraPDF verification.
 
-This app provides a simple graphical interface and batch processing capabilities, making it easy to prepare multiple documents for archival. It uses [Ghostscript](https://www.ghostscript.com/) as its conversion engine, which is distributed under the **GNU AGPLv3 license**.
+## Use
 
------
+Download the folder for your operating system, extract it, and launch `str-pdf.exe` (Windows), `str-pdf` (Linux), or `str-pdf.app` (macOS, once notarized). The release folder includes Python, Ghostscript, veraPDF, and Java. No account, key, separate runtime installation, or network connection is required for conversion.
 
-## ✨ Key Features
+Add PDFs with **Add PDF(s)…** (Ctrl+O), **Add Folder…** (tick **Include subfolders** to search recursively), or drag and drop. Select rows (Shift/Ctrl-click, Ctrl+A) for **Convert Selected** or **Remove Selected** (Delete); **Convert All & Verify** processes the whole list. Click a column header to sort. Double-click a converted row to open the result, or right-click for **Show in Folder**. The panel under the list shows the selected file's output path and, for failures, the veraPDF rules that failed.
 
-The new version focuses on a streamlined user experience and powerful features:
+Under **Save to**, choose **Next to original** (saves `name_pdfa.pdf` beside the source), **Folder**, or **Overwrite original**. Overwrite asks for confirmation and only replaces each original after conversion and verification pass. Select PDF/A-1b, 2b (recommended), or 3b. A file is marked **Verified** (green) only when veraPDF passes the matching profile. If different input files share a name, later outputs receive numbered copy names so they do not replace one another. A pop-up appears only when some files need attention; a clean run is reported in the status bar.
 
-  - **Intuitive GUI**: A clean and simple graphical interface for managing files.
-  - **Batch Conversion**: Convert multiple PDF files at once.
-  - **Multiple PDF/A Formats**: Choose between `PDF/A-1b`, `PDF/A-2b` (default), and `PDF/A-3b`.
-  - **Drag & Drop**: Easily add files by dragging them onto the application window.
-  - **Folder Support**: Add all PDF files from a selected folder in one click.
-  - **Conflict Resolution**: Choose to overwrite existing files or save them as copies if a file with the same name exists in the output folder.
-  - **Safe In-Place Overwrites**: Safely overwrites source files (if the output folder is the same as the source) by using a temporary file to prevent data loss on conversion failure.
-  - **Real-time Logging**: An optional log panel shows detailed Ghostscript conversion commands and progress.
-  - **Progress Tracking**: A progress bar and status updates keep you informed during the conversion process.
+Conversion settings are saved in the operating system's per-user application settings folder. Files and settings are not uploaded.
 
------
+## Build
 
-## 🖼️ Screenshot
+Build on each target operating system; PyInstaller does not create portable executables for other operating systems. Install Python 3.13 with Tk support, then install the project with its build tools:
 
-![App Screenshot](assets/app.png)
+```text
+python -m pip install -e ".[build]"
+```
 
------
+Place complete, compatible runtime distributions here before building:
 
-## 🚀 Getting Started
+```text
+runtime/
+  ghostscript/   # Full Ghostscript distribution, including bin/ and iccprofiles/srgb.icc
+  verapdf/       # veraPDF installation tree, including bin/verapdf[.bat]
+  java/          # Java runtime tree, including bin/java[.exe]
+```
 
-### For Users (Using the `.exe`)
+Review the engine licenses and notices before distributing a build. Then run:
 
-1.  Download `str-pdf.exe` and the `utils` folder.
+```text
+python build.py --clean
+```
 
-2.  Place them in the same directory. Your folder structure must look like this:
+The portable folder is created in `dist/str-pdf/`, with a matching ZIP named for the operating system and CPU architecture. Test the folder on a clean machine for the same operating system and CPU architecture. Build the Windows, Intel macOS, Apple Silicon macOS, and Linux variants on native runners.
 
-    ```
-    <your-app-directory>/
-    ├── str-pdf.exe
-    └── utils/
-        ├── auth.bin
-        ├── str.ico
-        └── btn_copy.ico
-        # Optional, see developer notes
-        └── gsdll64.dll
-    ```
+## Development
 
-### How to Use the Application
+```text
+src/str_pdf/     app.py (Tkinter UI), conversion.py (Ghostscript + veraPDF), smoke.py, __main__.py
+tests/           unit tests (standard-library unittest)
+assets/          app icon and screenshot
+build.py         portable-folder build
+```
 
-1.  **Add Files**:
-      - Click **"Add PDF(s)"** to select one or more files.
-      - Click **"Add from Folder"** to add all PDFs from a specific folder.
-      - Or, **drag and drop** your PDF files directly into the file list area.
-2.  **Select Output Folder**:
-      - Click the **"Output Folder"** button and choose a destination where your converted PDF/A files will be saved.
-3.  **Choose Conversion Format**:
-      - Select your desired PDF/A standard from the dropdown menu (e.g., `PDF/A-2b`).
-4.  **Convert**:
-      - Click the **"Convert PDF(s)"** button to begin the process.
-      - You can monitor the progress bar and view detailed logs by clicking **"Show Log ▼"**.
+```text
+python -m str_pdf                          # run the app
+python -m unittest discover -s tests       # unit tests
+python -m str_pdf --smoke-check            # real conversion + validation with the staged engines
+```
 
------
-
-## 🔑 Authentication Key Requirement
-
-To use the application, you must have a valid authentication key stored locally. This key is checked against a remote source to ensure the app is up-to-date and authorized.
-
-**Instructions:**
-
-1.  Navigate to the `utils` folder.
-2.  Ensure a file named `auth.bin` exists.
-      - **If it does not exist**, create it.
-      - **Paste the authentication key** found at the following URL into the `auth.bin` file:
-        ```
-        https://raw.githubusercontent.com/str-ucture/str-key/refs/heads/main/key_25.txt
-        ```
-      - **Save** the file. The app will automatically compare your local key with the remote one upon startup.
-
-### Note on Key Availability (Kill Switch)
-
-The remote check acts as a "kill switch." If the key URL becomes unavailable, the application will not run. This is intentional and may occur if:
-
-  - An update, change, or maintenance is in progress.
-  - The administrator has temporarily disabled access for security or maintenance reasons.
-
-This mechanism is fully visible and editable in the source code (`str-pdf.py`) for users who wish to build the app from source, in compliance with the AGPL license.
-
------
-
-## 🖥️ Dependencies & Developer Notes
-
-The application relies on Ghostscript for PDF conversion.
-
-1.  **Ghostscript Binary (`gsdll64.dll`)**
-    The `ghostscript` Python library requires the Ghostscript binary to be available.
-
-      - **Packaged Version**: The `utils` folder can contain `gsdll64.dll`. This allows the application to run portably without a system-wide Ghostscript installation.
-      - **System-wide Install**: If you have Ghostscript installed on your system and its `bin` directory is in your system's PATH, the `gsdll64.dll` in the `utils` folder is not required.
-
-2.  **Modified Python Library (`_gsprint.py`) - For Developers**
-    *(This information is primarily for those building from source).*
-    The original `README` mentioned a modified `ghostscript/_gsprint.py` file. If you encounter issues while building from source, ensure you are using the correct library versions or apply any necessary patches as described in the original documentation. For most users of the `.exe`, this is not a concern.
-
------
-
-## 📄 License
-
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. You are free to use, modify, and distribute it under the same license terms.
+The smoke check proves that an ordinary PDF fails the PDF/A check and that generated PDF/A-1b, 2b, and 3b files pass veraPDF. The packaged executable supports `--smoke-check` too, for checking a runtime bundle. The original v1 implementation is available in git history (commit `872ede7`).

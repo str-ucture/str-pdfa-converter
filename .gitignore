@@ -1,9 +1,9 @@
 build/
-Ghostscript/
-utils/_backup_codes/
-_backup_codes/
 dist/
-
-Basic_tips.md
-str-pdf.spec
-str-pdf.7z
+runtime/
+.venv/
+__pycache__/
+*.py[cod]
+*.spec
+settings.json
+*.egg-info/

@@ -1,55 +1,68 @@
-# str-pdf
+# PDF to PDF/A Converter
 
-Offline desktop conversion from PDF to PDF/A with independent veraPDF verification.
+> **Internal tool of str.ucture GmbH.** If you are not part of str.ucture GmbH, this software was not provided to you. It comes with no warranty, support, or liability. See [NOTICE](NOTICE.md).
 
-## Use
+Turn ordinary PDFs into archive-ready **PDF/A** files, and have each one checked automatically. Everything runs on your own computer: no internet, no account, no upload.
 
-Download the folder for your operating system, extract it, and launch `str-pdf.exe` (Windows), `str-pdf` (Linux), or `str-pdf.app` (macOS, once notarized). The release folder includes Python, Ghostscript, veraPDF, and Java. No account, key, separate runtime installation, or network connection is required for conversion.
+![Main window](docs/screenshots/results-light.png)
 
-Add PDFs with **Add PDF(s)…** (Ctrl+O), **Add Folder…** (tick **Include subfolders** to search recursively), or drag and drop. Select rows (Shift/Ctrl-click, Ctrl+A) for **Convert Selected** or **Remove Selected** (Delete); **Convert All & Verify** processes the whole list. Click a column header to sort. Double-click a converted row to open the result, or right-click for **Show in Folder**. The panel under the list shows the selected file's output path and, for failures, the veraPDF rules that failed.
+## Get started
 
-Under **Save to**, choose **Next to original** (saves `name_pdfa.pdf` beside the source), **Folder**, or **Overwrite original**. Overwrite asks for confirmation and only replaces each original after conversion and verification pass. Select PDF/A-1b, 2b (recommended), or 3b. A file is marked **Verified** (green) only when veraPDF passes the matching profile. If different input files share a name, later outputs receive numbered copy names so they do not replace one another. A pop-up appears only when some files need attention; a clean run is reported in the status bar.
+1. **Download** `str-pdf-windows-x64.zip` from the **Releases** page of this repository.
+2. **Extract** it: right-click the ZIP › **Extract All…** › **Extract**. (It won't work if you run it from inside the ZIP.)
+3. **Open** the extracted folder and double-click **`str-pdf.exe`**.
 
-Conversion settings are saved in the operating system's per-user application settings folder. Files and settings are not uploaded.
+The first time you open it, Windows may show *"Windows protected your PC"*. Click **More info › Run anyway**. Nothing needs to be installed.
 
-## Build
+## Convert your files
 
-Build on each target operating system; PyInstaller does not create portable executables for other operating systems. Install Python 3.13 with Tk support, then install the project with its build tools:
+1. **Add PDFs.** Drag files or folders onto the window, or click **Add PDFs** or **Add folder**.
+2. **Choose where to save** (bottom left):
+   - **Next to the original** saves `name_pdfa.pdf` beside each file *(recommended)*.
+   - **Folder** saves all results in one folder you choose.
+   - **Overwrite the original** replaces each file, but only after it has passed the check.
+3. **Choose the format** (bottom right). Keep **PDF/A-2b** unless you've been told otherwise.
+4. Click **Convert all & verify**.
 
-```text
-python -m pip install -e ".[build]"
-```
+Each file then shows its result:
 
-Place complete, compatible runtime distributions here before building:
+| Result | Meaning |
+|---|---|
+| 🟢 **Verified** | Converted and passed the PDF/A check. Double-click it to open the result. |
+| 🔴 **Validation failed** | Converted, but it didn't pass the check. Your original is untouched, and the attempt is kept as `name-validation-failed.pdf`. |
+| 🔴 **Conversion failed** | The file couldn't be read. It may be damaged, password-protected, or not really a PDF. Your original is untouched. |
+| ⚪ **Cancelled** | You pressed **Cancel** before this file was finished. |
 
-```text
-runtime/
-  ghostscript/   # Full Ghostscript distribution, including bin/ and iccprofiles/srgb.icc
-  verapdf/       # veraPDF installation tree, including bin/verapdf[.bat]
-  java/          # Java runtime tree, including bin/java[.exe]
-```
+Click any row to see details below the list, including why a file failed.
 
-Review the engine licenses and notices before distributing a build. Then run:
+## Good to know
 
-```text
-python build.py --clean
-```
+- **Your originals are safe.** A file is only replaced if you pick *Overwrite the original*, confirm it, and the result passes the check. Still, keep backups of important documents.
+- **Password-protected PDFs** can't be converted. Remove the password first, for example by printing to PDF.
+- **Already have files with the same name?** You'll be asked whether to replace them or save numbered copies.
+- **Right-click a row** to open the result, show it in its folder, convert it again, or remove it from the list.
+- **Light or dark:** click **…** (top right) › **Theme**. *Use system setting* follows Windows automatically.
+- **Your choices are remembered** (save location, format, theme). Overwrite is never remembered, for safety.
+- **To remove the app,** delete its folder. To also remove its settings, delete `%APPDATA%\str-pdf`.
 
-The portable folder is created in `dist/str-pdf/`, with a matching ZIP named for the operating system and CPU architecture. Test the folder on a clean machine for the same operating system and CPU architecture. Build the Windows, Intel macOS, Apple Silicon macOS, and Linux variants on native runners.
+## Which PDF/A format?
 
-## Development
+| Format | Use it when |
+|---|---|
+| **PDF/A-2b** | Almost always. The standard choice for long-term archiving. |
+| **PDF/A-1b** | An old archive system specifically requires PDF/A-1. |
+| **PDF/A-3b** | You need to keep file attachments inside the PDF (for example e-invoices). |
 
-```text
-src/str_pdf/     app.py (Tkinter UI), conversion.py (Ghostscript + veraPDF), smoke.py, __main__.py
-tests/           unit tests (standard-library unittest)
-assets/          app icon and screenshot
-build.py         portable-folder build
-```
+## Problems?
 
-```text
-python -m str_pdf                          # run the app
-python -m unittest discover -s tests       # unit tests
-python -m str_pdf --smoke-check            # real conversion + validation with the staged engines
-```
+| Problem | What to do |
+|---|---|
+| "Engine missing" message | The folder is incomplete. Extract the whole ZIP again, and don't move `str-pdf.exe` out of its folder. |
+| Nothing happens when you open it | Make sure you extracted the ZIP first (step 2). |
+| A file keeps failing | Select it and read the details. Click **Show log** for the full technical output to send to the maintainer. |
 
-The smoke check proves that an ordinary PDF fails the PDF/A check and that generated PDF/A-1b, 2b, and 3b files pass veraPDF. The packaged executable supports `--smoke-check` too, for checking a runtime bundle. The original v1 implementation is available in git history (commit `872ede7`).
+Contact: info@str-ucture.com
+
+---
+
+[Notice and disclaimer](NOTICE.md) · [License (GNU AGPL v3)](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [For maintainers](docs/DEVELOPMENT.md)

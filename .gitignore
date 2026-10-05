@@ -1,9 +1,37 @@
-build/
-dist/
+# Build outputs
+bin/
+obj/
+[Bb]uild/
+[Dd]ist/
+artifacts/
+
+# Runtime and generated samples
 runtime/
+samples/
+test_output/
+
+# Local secrets and environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python caches and packaging
 .venv/
+venv/
 __pycache__/
 *.py[cod]
 *.spec
-settings.json
 *.egg-info/
+
+# IDE and OS files
+.vs/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+
+# Local assistant configuration
+.claude/
+settings.json

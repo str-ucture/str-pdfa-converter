@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <!-- The engine and naming code has no WPF dependency, so it is compiled in directly. -->
+  <ItemGroup>
+    <Compile Include="..\..\src\StrPdf\Engines.cs" Link="Engines.cs" />
+    <Compile Include="..\..\src\StrPdf\Naming.cs" Link="Naming.cs" />
+    <Compile Include="..\..\src\StrPdf\Batch.cs" Link="Batch.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

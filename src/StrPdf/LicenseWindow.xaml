@@ -1,0 +1,137 @@
+<ui:FluentWindow
+    x:Class="StrPdf.LicenseWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:markdig="clr-namespace:Markdig.Wpf;assembly=Markdig.Wpf"
+    Title="License and notices"
+    Width="900" Height="640" MinWidth="700" MinHeight="480"
+    WindowStartupLocation="CenterOwner"
+    ShowInTaskbar="False"
+    ExtendsContentIntoTitleBar="True"
+    WindowBackdropType="None"
+    Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+    WindowCornerPreference="Round">
+
+    <ui:FluentWindow.Resources>
+        <ResourceDictionary>
+        <Style x:Key="Surface" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource SolidBackgroundFillColorQuarternaryBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource SurfaceStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style BasedOn="{StaticResource {x:Type ui:Button}}" TargetType="ui:Button">
+            <Setter Property="Height" Value="34" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <!--  Markdig.Wpf's default heading styles hardcode Foreground="#ff000000", which is invisible
+             in dark mode. Re-declared here (same FontSize/FontWeight, theme-aware color) since these
+             are looked up by ComponentResourceKey and a local override wins over the library's default.  -->
+        <Style TargetType="{x:Type Paragraph}" x:Key="{x:Static markdig:Styles.Heading1StyleKey}">
+            <Setter Property="FontSize" Value="42" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        </Style>
+        <Style TargetType="{x:Type Paragraph}" x:Key="{x:Static markdig:Styles.Heading2StyleKey}">
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        </Style>
+        <Style TargetType="{x:Type Paragraph}" x:Key="{x:Static markdig:Styles.Heading3StyleKey}">
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        </Style>
+        <Style TargetType="{x:Type Paragraph}" x:Key="{x:Static markdig:Styles.Heading4StyleKey}">
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="Light" />
+            <Setter Property="TextDecorations" Value="Underline" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        </Style>
+        </ResourceDictionary>
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Background="{DynamicResource BandBrush}" BorderBrush="{DynamicResource SurfaceStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+            <!--  ui:TitleBar.Icon only accepts an IconElement (e.g. ui:ImageIcon), not arbitrary content,
+                 so the visible mark is a separate overlay - same pattern as MainWindow's title bar icon.
+                 The native Icon stays set but invisible (Opacity 0) purely to reserve its layout slot;
+                 the .ico itself isn't used for the visible icon since its "pdf" row is baked-in black,
+                 which is invisible in dark mode.  -->
+            <Grid>
+                <ui:TitleBar Title="License and notices" Background="Transparent" ShowMinimize="False" FontSize="16" FontWeight="SemiBold">
+                    <ui:TitleBar.Icon>
+                        <ui:ImageIcon Source="pack://application:,,,/str.ico" Opacity="0" />
+                    </ui:TitleBar.Icon>
+                </ui:TitleBar>
+                <Viewbox Width="16" Height="16" Margin="16,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False">
+                    <Canvas Width="1080" Height="1080">
+                        <Path Fill="{StaticResource BrandPinkBrush}" Data="M146.3,319.6l125.8,43.4,18.3,29.9v55.4l-45.8,45.8h-102.7l-60.8-20.3,16.4-48.7,55,18.3h67l15.4-15.4v-11.1l-6.7-11.1-125.8-43.4-18.3-29.9v-54.5l45.8-45.8h103.2l60.8,20.3-16.4,48.7-55-18.3h-67.5l-15.4,15.4v10.1l6.8,11.1Z" />
+                        <Path Fill="{StaticResource BrandPinkBrush}" Data="M315.5,287.8v-50.6h43.4v-70.9h55.4v70.9h69.9v50.6h-69.9v140.8l14.9,14.9h32.3l52.6-16.4,14.9,47.7-61.7,19.3h-62.7l-45.8-45.8v-160.6h-43.4Z" />
+                        <Path Fill="{StaticResource BrandPinkBrush}" Data="M621.2,313.4v180.8h-55.4v-194.3l-14.9-61.2,44.8-11.1,9.2,37.1,28-32.3h80l56.9,55.4-36.6,37.6-43.4-42.4h-41.9l-26.5,30.4Z" />
+                        <Path Fill="{StaticResource BrandPinkBrush}" Data="M716.7,483.6v-26.5l17.8-17.8h26.5l17.8,17.8v26.5l-17.8,17.8h-26.5l-17.8-17.8Z" />
+                        <Path Fill="{DynamicResource TextFillColorPrimaryBrush}" Data="M482.1,633.4l46.3,45.8v170.2l-46.3,45.8h-85.3l-26-18.8v99.8h-55.4v-275.3l-14.9-61.2,44.8-11.1,9.2,37.1,28-32.3h99.8ZM370.7,714.4v108l30.9,22.2h56.4l14.9-14.9v-130.7l-14.9-14.9h-60.8l-26.5,30.4Z" />
+                        <Path Fill="{DynamicResource TextFillColorPrimaryBrush}" Data="M608.4,895.2l-46.3-45.8v-170.2l46.3-45.8h85.3l26,18.8v-99.3h55.4v274.8l14.9,61.2-44.8,11.1-9.2-37.1-28,32.3h-99.8ZM719.8,814.2v-108l-30.9-22.2h-56.4l-14.9,14.9v130.7l14.9,14.9h60.8l26.5-30.4Z" />
+                        <Path Fill="{DynamicResource TextFillColorPrimaryBrush}" Data="M903.5,552.9h62.7l61.7,19.3-14.9,47.7-52.6-16.4h-32.3l-14.9,14.9v43.9h69.9v50.6h-69.9v182.3h-55.4v-182.3h-43.4v-50.6h43.4v-63.6l45.8-45.8Z" />
+                    </Canvas>
+                </Viewbox>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="16,12,16,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="260" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border Padding="4" Style="{StaticResource Surface}">
+                <ListBox x:Name="DocList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="OnDocChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+            <Border Grid.Column="1" Margin="12,0,0,0" Padding="1" Style="{StaticResource Surface}">
+                <Grid>
+                    <TextBox
+                        x:Name="DocText"
+                        Padding="12,10"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        FontFamily="Cascadia Mono, Consolas"
+                        FontSize="12"
+                        IsReadOnly="True"
+                        IsReadOnlyCaretVisible="True"
+                        TextWrapping="Wrap"
+                        VerticalScrollBarVisibility="Auto"
+                        HorizontalScrollBarVisibility="Disabled" />
+                    <markdig:MarkdownViewer
+                        x:Name="DocMarkdown"
+                        Padding="12,10"
+                        Background="Transparent"
+                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                        Visibility="Collapsed" />
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2" Margin="0,12,0,0" Padding="16,12" Background="{DynamicResource BandBrush}"
+                BorderBrush="{DynamicResource SurfaceStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
+            <DockPanel>
+                <ui:Button DockPanel.Dock="Right" Margin="8,0,0,0" Content="Close" IsCancel="True" Click="OnClose" />
+                <ui:Button x:Name="FolderButton" DockPanel.Dock="Right" Margin="8,0,0,0" Content="Open folder" Icon="{ui:SymbolIcon FolderOpen24}" Click="OnOpenFolder" />
+                <ui:Button x:Name="SaveButton" DockPanel.Dock="Right" Margin="8,0,0,0" Content="Save as…" Icon="{ui:SymbolIcon Save24}" Click="OnSave" />
+                <ui:Button DockPanel.Dock="Right" Content="Copy" Icon="{ui:SymbolIcon Copy24}" Click="OnCopy" />
+                <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+            </DockPanel>
+        </Border>
+    </Grid>
+</ui:FluentWindow>

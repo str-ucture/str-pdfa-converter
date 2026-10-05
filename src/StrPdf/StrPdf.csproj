@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>StrPdf</RootNamespace>
+    <AssemblyName>str-pdf</AssemblyName>
+    <Version>3.1.0</Version>
+    <Product>PDF to PDF/A Converter</Product>
+    <Company>str.ucture GmbH</Company>
+    <Copyright>Copyright © 2025-2026 str.ucture GmbH</Copyright>
+    <ApplicationIcon>..\..\assets\str.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
+    <PackageReference Include="Markdig.Wpf" Version="0.5.0.1" />
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="..\..\assets\str.ico" Link="str.ico" />
+  </ItemGroup>
+
+</Project>
